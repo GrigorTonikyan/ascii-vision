@@ -1,0 +1,6 @@
+{
+  "chat.tools.autoApprove": true,
+  "github.copilot.chat.agent.autoFix": true,
+
+  "github.copilot.chat.agent.runTasks": true
+  }
