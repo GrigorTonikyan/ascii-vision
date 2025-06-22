@@ -23,10 +23,37 @@ pub struct AppConfig {
     pub config_dir: PathBuf,
 }
 
+#[derive(Clone, Debug, Deserialize, Default)]
+pub struct CameraConfig {
+    #[serde(default = "default_camera_index")]
+    pub default_camera_index: u32,
+    #[serde(default = "default_camera_fps")]
+    pub fps: f64,
+    #[serde(default = "default_camera_width")]
+    pub width: u32,
+    #[serde(default = "default_camera_height")]
+    pub height: u32,
+}
+
+fn default_camera_index() -> u32 {
+    0
+}
+fn default_camera_fps() -> f64 {
+    30.0
+}
+fn default_camera_width() -> u32 {
+    640
+}
+fn default_camera_height() -> u32 {
+    480
+}
+
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct Config {
     #[serde(default, flatten)]
     pub config: AppConfig,
+    #[serde(default)]
+    pub camera: CameraConfig,
     #[serde(default)]
     pub keybindings: KeyBindings,
     #[serde(default)]

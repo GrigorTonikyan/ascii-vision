@@ -6,6 +6,8 @@ use crate::app::App;
 
 mod action;
 mod app;
+mod ascii;
+mod camera;
 mod cli;
 mod components;
 mod config;

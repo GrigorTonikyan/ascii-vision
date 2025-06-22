@@ -3,10 +3,11 @@ use crossterm::event::KeyEvent;
 use ratatui::prelude::Rect;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 
 use crate::{
     action::Action,
+    camera::CameraCapture,
     components::{Component, fps::FpsCounter, home::Home},
     config::Config,
     tui::{Event, Tui},
@@ -23,6 +24,7 @@ pub struct App {
     last_tick_key_events: Vec<KeyEvent>,
     action_tx: mpsc::UnboundedSender<Action>,
     action_rx: mpsc::UnboundedReceiver<Action>,
+    camera_capture: Option<CameraCapture>,
 }
 
 #[derive(Default, Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -45,6 +47,7 @@ impl App {
             last_tick_key_events: Vec::new(),
             action_tx,
             action_rx,
+            camera_capture: None,
         })
     }
 
@@ -138,6 +141,14 @@ impl App {
             match action {
                 Action::Tick => {
                     self.last_tick_key_events.drain(..);
+                    // Capture camera frame on tick if camera is active
+                    // Only capture if no frame is currently being processed
+                    if let Some(ref mut camera) = self.camera_capture {
+                        if camera.is_active() {
+                            // Try to capture frame, but don't block if it fails
+                            let _ = camera.capture_frame();
+                        }
+                    }
                 }
                 Action::Quit => self.should_quit = true,
                 Action::Suspend => self.should_suspend = true,
@@ -145,6 +156,17 @@ impl App {
                 Action::ClearScreen => tui.terminal.clear()?,
                 Action::Resize(w, h) => self.handle_resize(tui, w, h)?,
                 Action::Render => self.render(tui)?,
+                Action::ToggleCamera => {
+                    self.handle_camera_toggle()?;
+                }
+                Action::StartCamera => {
+                    // This action is sent to update the UI after camera starts
+                    // Don't trigger any camera logic here
+                }
+                Action::StopCamera => {
+                    // This action is sent to update the UI after camera stops
+                    // Don't trigger any camera logic here
+                }
                 _ => {}
             }
             for component in self.components.iter_mut() {
@@ -172,6 +194,78 @@ impl App {
                 }
             }
         })?;
+        Ok(())
+    }
+
+    fn handle_camera_toggle(&mut self) -> Result<()> {
+        debug!("handle_camera_toggle called");
+        if self.camera_capture.is_none() {
+            debug!("Creating new camera capture");
+            let mut camera = CameraCapture::new();
+
+            debug!(
+                "Initializing camera with index: {}, resolution: {}x{}",
+                self.config.camera.default_camera_index,
+                self.config.camera.width,
+                self.config.camera.height
+            );
+
+            match camera.initialize(
+                self.config.camera.default_camera_index,
+                self.config.camera.width,
+                self.config.camera.height,
+                self.action_tx.clone(),
+            ) {
+                Ok(()) => match camera.start() {
+                    Ok(()) => {
+                        info!("Camera started successfully");
+                        self.camera_capture = Some(camera);
+                        // Send StartCamera action to update UI
+                        self.action_tx.send(Action::StartCamera)?;
+                    }
+                    Err(e) => {
+                        error!("Failed to start camera: {}", e);
+                        self.action_tx.send(Action::CameraError(format!(
+                            "Failed to start camera: {}",
+                            e
+                        )))?;
+                    }
+                },
+                Err(e) => {
+                    error!("Failed to initialize camera: {}", e);
+                    self.action_tx.send(Action::CameraError(format!(
+                        "Failed to initialize camera: {}",
+                        e
+                    )))?;
+                }
+            }
+        } else if let Some(ref mut camera) = self.camera_capture {
+            debug!(
+                "Camera already exists, toggling state. Current active: {}",
+                camera.is_active()
+            );
+            if !camera.is_active() {
+                debug!("Starting existing camera");
+                match camera.start() {
+                    Ok(()) => {
+                        info!("Camera restarted successfully");
+                        self.action_tx.send(Action::StartCamera)?;
+                    }
+                    Err(e) => {
+                        error!("Failed to restart camera: {}", e);
+                        self.action_tx.send(Action::CameraError(format!(
+                            "Failed to restart camera: {}",
+                            e
+                        )))?;
+                    }
+                }
+            } else {
+                debug!("Stopping camera");
+                camera.stop();
+                self.action_tx.send(Action::StopCamera)?;
+            }
+        }
+
         Ok(())
     }
 }

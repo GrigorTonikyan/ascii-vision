@@ -4,7 +4,21 @@
       "<q>": "Quit", // Quit the application
       "<Ctrl-d>": "Quit", // Another way to quit
       "<Ctrl-c>": "Quit", // Yet another way to quit
-      "<Ctrl-z>": "Suspend" // Suspend the application
+      "<Ctrl-z>": "Suspend", // Suspend the application
+      "<space>": "ToggleCamera", // Toggle camera on/off
+      "<c>": "ToggleColor", // Toggle color mode
+      "<s>": "NextCharacterSet", // Next character set
+      "<a>": "PreviousCharacterSet", // Previous character set
+      "<+>": "IncreaseScale", // Increase scale
+      "<->": "DecreaseScale", // Decrease scale
     },
-  }
+  },
+  "camera": {
+    "default_camera_index": 0,
+    "fps": 30.0,
+    "width": 640,
+    "height": 480,
+    // "width": 1280,
+    // "height": 720,
+  },
 }
