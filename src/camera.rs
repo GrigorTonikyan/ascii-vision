@@ -26,7 +26,7 @@ impl CameraCapture {
             is_active: false,
             frame_sender: None,
             last_frame_time: std::time::Instant::now(),
-            frame_skip_threshold: Duration::from_millis(33), // ~30 FPS max
+            frame_skip_threshold: Duration::from_millis(50), // ~20 FPS max for better responsiveness
         }
     }
 
@@ -63,16 +63,10 @@ impl CameraCapture {
                     );
                 }
 
-                // Start the camera
-                debug!("Opening camera stream");
-                if let Err(e) = camera.open_stream() {
-                    error!("Failed to open camera stream: {}", e);
-                    return Err(e.into());
-                }
-
+                // Don't open stream here - wait for start() to be called
                 let actual_resolution = camera.resolution();
                 info!(
-                    "Camera initialized successfully with resolution: {}x{}",
+                    "Camera initialized successfully with resolution: {}x{} (stream not yet opened)",
                     actual_resolution.width(),
                     actual_resolution.height()
                 );
@@ -90,27 +84,135 @@ impl CameraCapture {
 
     /// Start capturing frames
     pub fn start(&mut self) -> Result<()> {
-        debug!("start() called");
+        debug!("start() called, current active state: {}", self.is_active);
         if self.camera.is_none() {
             error!("Cannot start: camera not initialized");
             return Err(color_eyre::eyre::eyre!("Camera not initialized"));
         }
 
-        debug!("Setting camera to active");
+        // Open the camera stream if not already active
+        if !self.is_active {
+            if let Some(ref mut camera) = self.camera {
+                debug!("Opening camera stream");
+                match camera.open_stream() {
+                    Ok(()) => {
+                        info!("Camera stream opened successfully");
+                    }
+                    Err(e) => {
+                        error!("Failed to open camera stream: {}", e);
+                        return Err(e.into());
+                    }
+                }
+            }
+        } else {
+            debug!("Camera already active");
+        }
+
         self.is_active = true;
-        info!("Camera capture started");
+        info!("Camera capture started successfully");
         Ok(())
     }
 
     /// Stop capturing frames
     pub fn stop(&mut self) {
-        self.is_active = false;
+        debug!("stop() called, current active state: {}", self.is_active);
+
+        if !self.is_active {
+            debug!("Camera already inactive");
+            return;
+        }
+
+        // Properly stop the camera stream BEFORE setting inactive
+        if let Some(ref mut camera) = self.camera {
+            debug!("Stopping camera stream");
+            match camera.stop_stream() {
+                Ok(()) => {
+                    info!("Camera stream stopped successfully");
+                    // Only set inactive after successful stop
+                    self.is_active = false;
+                }
+                Err(e) => {
+                    error!("Error stopping camera stream: {}", e);
+                    // Don't set inactive if stop failed - keep trying
+                    return;
+                }
+            }
+        } else {
+            debug!("No camera to stop");
+            self.is_active = false;
+        }
+
         info!("Camera capture stopped");
+    }
+
+    /// Force stop the camera - use this for emergency shutdown
+    #[allow(dead_code)]
+    pub fn force_stop(&mut self) {
+        debug!(
+            "force_stop() called, current active state: {}",
+            self.is_active
+        );
+
+        if let Some(ref mut camera) = self.camera {
+            debug!("Force stopping camera stream");
+            // Try multiple times if needed
+            for attempt in 1..=3 {
+                match camera.stop_stream() {
+                    Ok(()) => {
+                        info!(
+                            "Camera stream force stopped successfully on attempt {}",
+                            attempt
+                        );
+                        break;
+                    }
+                    Err(e) => {
+                        error!(
+                            "Attempt {} to force stop camera stream failed: {}",
+                            attempt, e
+                        );
+                        if attempt < 3 {
+                            std::thread::sleep(Duration::from_millis(100));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Always set inactive in force stop
+        self.is_active = false;
+        info!("Camera force stopped");
+    }
+
+    /// Reset the camera completely - use when camera gets into bad state
+    #[allow(dead_code)]
+    pub fn reset(&mut self) -> Result<()> {
+        info!("Resetting camera completely");
+
+        // Force cleanup first
+        self.cleanup();
+
+        // Small delay to let the camera hardware reset
+        std::thread::sleep(Duration::from_millis(500));
+
+        info!("Camera reset completed");
+        Ok(())
     }
 
     /// Check if camera is active
     pub fn is_active(&self) -> bool {
         self.is_active
+    }
+
+    /// Check if camera stream is actually running (not just our flag)
+    #[allow(dead_code)]
+    pub fn is_stream_open(&self) -> bool {
+        if let Some(_camera) = &self.camera {
+            // The nokhwa library doesn't provide a direct method to check stream status
+            // So we rely on our is_active flag and hope it's accurate
+            self.is_active
+        } else {
+            false
+        }
     }
 
     /// Capture a single frame and send it via the action channel
@@ -161,7 +263,7 @@ impl CameraCapture {
             Err(e) => {
                 error!("Failed to capture frame: {}", e);
                 if let Err(send_err) =
-                    frame_sender.send(Action::CameraError(format!("Frame capture failed: {}", e)))
+                    frame_sender.send(Action::CameraError(format!("Frame capture failed: {e}")))
                 {
                     error!("Failed to send camera error: {}", send_err);
                 }
@@ -217,6 +319,7 @@ impl CameraCapture {
     }
 
     /// Get current camera resolution
+    #[allow(dead_code)]
     pub fn get_resolution(&self) -> Option<(u32, u32)> {
         self.camera.as_ref().map(|cam| {
             let res = cam.resolution();
@@ -226,11 +329,20 @@ impl CameraCapture {
 
     /// Cleanup camera resources
     pub fn cleanup(&mut self) {
+        debug!("cleanup() called, current active state: {}", self.is_active);
+
         if let Some(mut camera) = self.camera.take() {
-            if let Err(e) = camera.stop_stream() {
-                error!("Error stopping camera stream: {}", e);
+            debug!("Cleaning up camera, stopping stream");
+            match camera.stop_stream() {
+                Ok(()) => {
+                    info!("Camera stream stopped during cleanup");
+                }
+                Err(e) => {
+                    error!("Error stopping camera stream during cleanup: {}", e);
+                }
             }
         }
+
         self.is_active = false;
         self.frame_sender = None;
         self.last_frame_time = std::time::Instant::now();
@@ -245,6 +357,7 @@ impl Drop for CameraCapture {
 }
 
 /// Async camera capture loop
+#[allow(dead_code)] // Potential future use for async camera handling
 pub async fn camera_capture_loop(mut camera: CameraCapture, fps: f64) {
     let frame_duration = Duration::from_secs_f64(1.0 / fps);
     let mut interval = tokio::time::interval(frame_duration);

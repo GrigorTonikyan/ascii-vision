@@ -69,6 +69,7 @@ pub struct AsciiConverter {
     scale_factor: f32,
 }
 
+#[allow(dead_code)] // Public API methods for potential future use
 impl AsciiConverter {
     pub fn new(character_set: CharacterSet, width: u32, height: u32) -> Self {
         Self {
@@ -84,15 +85,18 @@ impl AsciiConverter {
         Self::new(CharacterSet::Dense, width, height)
     }
 
+    #[allow(dead_code)]
     pub fn new_simple(width: u32, height: u32) -> Self {
         Self::new(CharacterSet::Simple, width, height)
     }
 
+    #[allow(dead_code)]
     pub fn new_blocks(width: u32, height: u32) -> Self {
         Self::new(CharacterSet::Blocks, width, height)
     }
 
     /// Convert image to ASCII art with optimized performance
+    #[allow(dead_code)]
     pub fn convert_image(&self, image: &DynamicImage) -> Vec<String> {
         let (target_width, target_height) = self.get_scaled_dimensions();
 
@@ -242,51 +246,40 @@ impl AsciiConverter {
         for y in 0..target_height {
             let mut line = Vec::with_capacity(target_width as usize);
             for x in 0..target_width {
-                // Use 2x2 sampling for better quality when downscaling
+                // Use single pixel sampling for better performance, not 2x2 sampling
                 let src_x = (x as f32 * x_scale) as u32;
                 let src_y = (y as f32 * y_scale) as u32;
 
-                let mut r_sum = 0u32;
-                let mut g_sum = 0u32;
-                let mut b_sum = 0u32;
-                let mut samples = 0u32;
+                // Bounds checking
+                if src_x < frame_width && src_y < frame_height {
+                    let pixel_idx = ((src_y * frame_width + src_x) * 3) as usize;
 
-                // Sample a small area instead of single pixel
-                for dy in 0..2 {
-                    for dx in 0..2 {
-                        let sample_x = (src_x + dx).min(frame_width - 1);
-                        let sample_y = (src_y + dy).min(frame_height - 1);
-                        let pixel_idx = ((sample_y * frame_width + sample_x) * 3) as usize;
+                    if pixel_idx + 2 < frame.len() {
+                        let r = frame[pixel_idx];
+                        let g = frame[pixel_idx + 1];
+                        let b = frame[pixel_idx + 2];
 
-                        if pixel_idx + 2 < frame.len() {
-                            r_sum += frame[pixel_idx] as u32;
-                            g_sum += frame[pixel_idx + 1] as u32;
-                            b_sum += frame[pixel_idx + 2] as u32;
-                            samples += 1;
-                        }
-                    }
-                }
+                        // Corrected brightness calculation using proper luminance formula
+                        let brightness = (77 * r as u32 + 150 * g as u32 + 29 * b as u32) / 256;
+                        let char_index = ((255 - brightness) * (chars.len() - 1) as u32 / 255) as usize;
+                        let char_index = char_index.min(chars.len() - 1);
 
-                if samples > 0 {
-                    let r = (r_sum / samples) as u8;
-                    let g = (g_sum / samples) as u8;
-                    let b = (b_sum / samples) as u8;
+                        let style = if self.color_enabled {
+                            Style::default().fg(ratatui::style::Color::Rgb(r, g, b))
+                        } else {
+                            Style::default()
+                        };
 
-                    // Corrected brightness calculation using proper luminance formula
-                    let brightness = (77 * r as u32 + 150 * g as u32 + 29 * b as u32) / 256;
-                    let char_index = ((255 - brightness) * (chars.len() - 1) as u32 / 255) as usize;
-                    let char_index = char_index.min(chars.len() - 1);
-
-                    let style = if self.color_enabled {
-                        Style::default().fg(ratatui::style::Color::Rgb(r, g, b))
+                        line.push(ColoredChar {
+                            ch: chars[char_index],
+                            style,
+                        });
                     } else {
-                        Style::default()
-                    };
-
-                    line.push(ColoredChar {
-                        ch: chars[char_index],
-                        style,
-                    });
+                        line.push(ColoredChar {
+                            ch: ' ',
+                            style: Style::default(),
+                        });
+                    }
                 } else {
                     line.push(ColoredChar {
                         ch: ' ',

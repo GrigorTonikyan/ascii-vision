@@ -134,46 +134,70 @@ impl App {
     }
 
     fn handle_actions(&mut self, tui: &mut Tui) -> Result<()> {
+        // Process actions with priority: UI actions first, then camera frames
+        let mut camera_frames = Vec::new();
+        let mut other_actions = Vec::new();
+
+        // Separate camera frames from other actions for prioritized processing
         while let Ok(action) = self.action_rx.try_recv() {
-            if action != Action::Tick && action != Action::Render {
-                debug!("{action:?}");
-            }
             match action {
-                Action::Tick => {
-                    self.last_tick_key_events.drain(..);
-                    // Capture camera frame on tick if camera is active
-                    // Only capture if no frame is currently being processed
-                    if let Some(ref mut camera) = self.camera_capture {
-                        if camera.is_active() {
-                            // Try to capture frame, but don't block if it fails
-                            let _ = camera.capture_frame();
-                        }
-                    }
-                }
-                Action::Quit => self.should_quit = true,
-                Action::Suspend => self.should_suspend = true,
-                Action::Resume => self.should_suspend = false,
-                Action::ClearScreen => tui.terminal.clear()?,
-                Action::Resize(w, h) => self.handle_resize(tui, w, h)?,
-                Action::Render => self.render(tui)?,
-                Action::ToggleCamera => {
-                    self.handle_camera_toggle()?;
-                }
-                Action::StartCamera => {
-                    // This action is sent to update the UI after camera starts
-                    // Don't trigger any camera logic here
-                }
-                Action::StopCamera => {
-                    // This action is sent to update the UI after camera stops
-                    // Don't trigger any camera logic here
-                }
-                _ => {}
+                Action::CameraFrame(_, _, _) => camera_frames.push(action),
+                _ => other_actions.push(action),
             }
-            for component in self.components.iter_mut() {
-                if let Some(action) = component.update(action.clone())? {
-                    self.action_tx.send(action)?
-                };
+        }
+
+        // Process UI actions first for better responsiveness
+        for action in other_actions {
+            self.process_action(action, tui)?;
+        }
+
+        // Process only the latest camera frame to prevent backup
+        if let Some(latest_frame) = camera_frames.into_iter().last() {
+            self.process_action(latest_frame, tui)?;
+        }
+
+        Ok(())
+    }
+
+    fn process_action(&mut self, action: Action, tui: &mut Tui) -> Result<()> {
+        if action != Action::Tick && action != Action::Render {
+            debug!("{action:?}");
+        }
+        match action {
+            Action::Tick => {
+                self.last_tick_key_events.drain(..);
+                // Capture camera frame on tick if camera is active
+                // Only capture if no frame is currently being processed
+                if let Some(ref mut camera) = self.camera_capture
+                    && camera.is_active()
+                {
+                    // Try to capture frame, but don't block if it fails
+                    let _ = camera.capture_frame();
+                }
             }
+            Action::Quit => self.should_quit = true,
+            Action::Suspend => self.should_suspend = true,
+            Action::Resume => self.should_suspend = false,
+            Action::ClearScreen => tui.terminal.clear()?,
+            Action::Resize(w, h) => self.handle_resize(tui, w, h)?,
+            Action::Render => self.render(tui)?,
+            Action::ToggleCamera => {
+                self.handle_camera_toggle()?;
+            }
+            Action::StartCamera => {
+                // This action is sent to update the UI after camera starts
+                // Don't trigger any camera logic here
+            }
+            Action::StopCamera => {
+                // This action is sent to update the UI after camera stops
+                // Don't trigger any camera logic here
+            }
+            _ => {}
+        }
+        for component in self.components.iter_mut() {
+            if let Some(action) = component.update(action.clone())? {
+                self.action_tx.send(action)?
+            };
         }
         Ok(())
     }
@@ -190,7 +214,7 @@ impl App {
                 if let Err(err) = component.draw(frame, frame.area()) {
                     let _ = self
                         .action_tx
-                        .send(Action::Error(format!("Failed to draw: {:?}", err)));
+                        .send(Action::Error(format!("Failed to draw: {err:?}")));
                 }
             }
         })?;
@@ -224,18 +248,15 @@ impl App {
                         self.action_tx.send(Action::StartCamera)?;
                     }
                     Err(e) => {
-                        error!("Failed to start camera: {}", e);
-                        self.action_tx.send(Action::CameraError(format!(
-                            "Failed to start camera: {}",
-                            e
-                        )))?;
+                        error!("Failed to start camera: {e}");
+                        self.action_tx
+                            .send(Action::CameraError(format!("Failed to start camera: {e}")))?;
                     }
                 },
                 Err(e) => {
-                    error!("Failed to initialize camera: {}", e);
+                    error!("Failed to initialize camera: {e}");
                     self.action_tx.send(Action::CameraError(format!(
-                        "Failed to initialize camera: {}",
-                        e
+                        "Failed to initialize camera: {e}"
                     )))?;
                 }
             }
@@ -252,16 +273,22 @@ impl App {
                         self.action_tx.send(Action::StartCamera)?;
                     }
                     Err(e) => {
-                        error!("Failed to restart camera: {}", e);
+                        error!("Failed to restart camera: {e}");
                         self.action_tx.send(Action::CameraError(format!(
-                            "Failed to restart camera: {}",
-                            e
+                            "Failed to restart camera: {e}"
                         )))?;
                     }
                 }
             } else {
-                debug!("Stopping camera");
+                debug!(
+                    "Stopping camera - current active state: {}",
+                    camera.is_active()
+                );
                 camera.stop();
+                debug!(
+                    "Camera stop() called - new active state: {}",
+                    camera.is_active()
+                );
                 self.action_tx.send(Action::StopCamera)?;
             }
         }

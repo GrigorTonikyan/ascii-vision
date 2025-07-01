@@ -18,9 +18,10 @@ pub struct Home {
     current_frame: Vec<Vec<ColoredChar>>,
     camera_active: bool,
     camera_error: Option<String>,
-    current_camera_index: u32,
     available_cameras: Vec<(u32, String)>,
     status_message: String,
+    last_frame_processed: std::time::Instant,
+    pending_frame: Option<(Vec<u8>, u32, u32)>,
 }
 
 impl Default for Home {
@@ -39,9 +40,10 @@ impl Home {
             current_frame: Vec::new(),
             camera_active: false,
             camera_error: None,
-            current_camera_index: 0,
             available_cameras: Vec::new(),
             status_message: "Press SPACE to start camera".to_string(),
+            last_frame_processed: std::time::Instant::now(),
+            pending_frame: None,
         }
     }
 
@@ -53,7 +55,7 @@ impl Home {
                 if !self.available_cameras.is_empty() {
                     let camera_info = cameras
                         .iter()
-                        .map(|(id, name)| format!("ID {}: {}", id, name))
+                        .map(|(id, name)| format!("ID {id}: {name}"))
                         .collect::<Vec<_>>()
                         .join(", ");
 
@@ -69,9 +71,27 @@ impl Home {
                 }
             }
             Err(e) => {
-                let error_msg = format!("Error listing cameras: {}", e);
+                let error_msg = format!("Error listing cameras: {e}");
                 self.status_message = error_msg.clone();
                 error!("{}", error_msg);
+            }
+        }
+    }
+
+    /// Process pending frame if available and enough time has passed
+    fn process_pending_frame(&mut self) {
+        if let Some((frame_data, width, height)) = self.pending_frame.take() {
+            let now = std::time::Instant::now();
+            if now.duration_since(self.last_frame_processed) >= std::time::Duration::from_millis(50)
+            {
+                self.current_frame =
+                    self.ascii_converter
+                        .convert_rgb_frame_direct(&frame_data, width, height);
+                self.last_frame_processed = now;
+                self.camera_error = None;
+            } else {
+                // Put frame back if not ready to process yet
+                self.pending_frame = Some((frame_data, width, height));
             }
         }
     }
@@ -103,7 +123,8 @@ impl Component for Home {
     fn update(&mut self, action: Action) -> Result<Option<Action>> {
         match action {
             Action::Tick => {
-                // Update status periodically
+                // Process pending frame if enough time has passed
+                self.process_pending_frame();
             }
             Action::Render => {
                 // Nothing special on render
@@ -111,11 +132,23 @@ impl Component for Home {
             Action::CameraFrame(frame_data, width, height) => {
                 debug!("Received camera frame: {}x{}", width, height);
                 if self.camera_active {
-                    // Use the optimized direct conversion method
-                    self.current_frame =
-                        self.ascii_converter
-                            .convert_rgb_frame_direct(&frame_data, width, height);
-                    self.camera_error = None;
+                    // Use frame throttling to prevent UI blocking
+                    let now = std::time::Instant::now();
+                    if now.duration_since(self.last_frame_processed)
+                        >= std::time::Duration::from_millis(50)
+                    {
+                        // Process frame immediately if enough time has passed
+                        self.current_frame = self.ascii_converter.convert_rgb_frame_direct(
+                            &frame_data,
+                            width,
+                            height,
+                        );
+                        self.last_frame_processed = now;
+                        self.camera_error = None;
+                    } else {
+                        // Store frame for later processing to avoid blocking
+                        self.pending_frame = Some((frame_data, width, height));
+                    }
                 }
             }
             Action::CameraError(ref error) => {
@@ -133,6 +166,7 @@ impl Component for Home {
                 info!("StopCamera action received");
                 self.camera_active = false;
                 self.current_frame.clear();
+                self.pending_frame = None;
                 self.status_message = format!(
                     "Camera stopped. Found {} camera(s). Press SPACE to restart.",
                     self.available_cameras.len()
@@ -234,7 +268,7 @@ impl Home {
 
         if let Some(ref error) = self.camera_error {
             // Display error message
-            let error_text = Paragraph::new(format!("Camera Error: {}", error))
+            let error_text = Paragraph::new(format!("Camera Error: {error}"))
                 .style(Style::default().fg(Color::Red))
                 .alignment(Alignment::Center)
                 .block(block);
