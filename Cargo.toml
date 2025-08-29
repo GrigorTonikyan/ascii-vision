@@ -40,7 +40,7 @@ tokio = { version = "1.40.0", features = ["full"] }
 tokio-util = "0.7.12"
 tracing = "0.1.40"
 tracing-error = "0.2.0"
-tracing-subscriber = { version = "0.3.18", features = ["env-filter", "serde"] }
+tracing-subscriber = { version = "0.3.20", features = ["env-filter", "serde"] }
 
 # Camera and image processing
 nokhwa = { version = "0.10.7", features = ["input-native"] }
