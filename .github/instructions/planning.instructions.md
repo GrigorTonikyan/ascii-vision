@@ -3,7 +3,9 @@ applyTo: '**'
 description: Structured approach to feature planning and development tracking
 ---
 
-## Development Plan Schema
+# Development Plan GUID LINES
+
+## Schema
 
 Follow this structure precisely when drafting a plan. Each `.md` file defines one feature and  
 must live in `.github/planning/`.

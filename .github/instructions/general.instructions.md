@@ -47,7 +47,7 @@ description: Core development principles and standards for UPM project
 
 ## Documentation Standards
 
-- Keep README.md up-to-date with current functionality
+- Keep `README.md` and `CHANGELOG.md` up-to-date with current functionality
 - Document all public APIs and interfaces
 - Include code examples where appropriate
 - Maintain architecture documentation for complex systems
